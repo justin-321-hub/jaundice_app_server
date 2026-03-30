@@ -1,12 +1,11 @@
 from typing import Optional, Dict, Any
-import firebase_admin
 from firebase_admin import auth, credentials
 from fastapi import Header, HTTPException, status
+from .firebase_config import init_firebase
 
 # 只初始化一次
-if not firebase_admin._apps:
-    cred = credentials.Certificate( r"C:\Users\Sheng\Desktop\AJ\backend\serviceAccountKey.json")
-    firebase_admin.initialize_app(cred)
+
+init_firebase()
 
 
 def _extract_bearer_token(authorization: Optional[str]) -> str:

@@ -1,6 +1,9 @@
 import io
+import json
+import os
 from typing import Optional, Dict, Any
 from firebase_admin import auth, firestore, credentials
+import firebase_admin
 from pydantic import BaseModel
 from schemas_baby import CreateBabyAccountReq
 from schemas_admin import CreateClinicianAccountReq
@@ -9,6 +12,9 @@ from PIL import Image
 from fastapi import FastAPI, Depends, Form, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_verify import verify_firebase_user
+from firebase_config import init_firebase
+
+init_firebase()
 
 db = firestore.client()
 

@@ -6,8 +6,12 @@ from .schemas_baby import CreateBabyAccountReq
 from .schemas_admin import CreateClinicianAccountReq
 import numpy as np
 from PIL import Image
-from fastapi import FastAPI, Depends, Form, HTTPException, UploadFile, File, Header
+from fastapi import FastAPI, Depends, Form, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from .firebase_verify import verify_firebase_user
 from .firebase_config import init_firebase
 
@@ -19,14 +23,41 @@ app = FastAPI(title="JaundiceGuardian AI API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # demo先開
+    # 目前只有 Android/iOS Mobile App 呼叫此伺服器，不受 CORS 限制；
+    # 沒有網頁版在用，故拒絕所有瀏覽器來源。若日後有網頁版上線，改為白名單實際網域。
+    allow_origins=[],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# =========================
+# Rate limiting（S6：防止帳號管理端點被打爆/濫用）
+# 規則：每分鐘最多 10 次；已登入（能解出合法 Firebase uid）用 uid 為 key，
+# 否則（未帶 Token 或 Token 無效）退回用 IP，比照 S1/S14 的作法。
+# =========================
+def _rate_limit_key(request: Request) -> str:
+    authorization = request.headers.get("authorization")
+    if authorization:
+        try:
+            token = authorization.replace("Bearer ", "", 1)
+            decoded = auth.verify_id_token(token)
+            uid = decoded.get("uid")
+            if uid:
+                return uid
+        except Exception:
+            pass
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key, default_limits=["10/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 
 @app.get("/health")
+@limiter.exempt
 def health():
     return {"ok": True}
 
@@ -106,18 +137,10 @@ async def analyze(
     roi_y: Optional[float] = Form(None),
     roi_w: Optional[float] = Form(None),
     roi_h: Optional[float] = Form(None),
-    authorization: Optional[str] = Header(None),
+    firebase_user: dict = Depends(verify_firebase_user),
 ):
     try:
-        # 這裡可拿到 Firebase uid
-        uid = None
-        if authorization:
-          try:
-              token = authorization.replace("Bearer ", "")
-              decoded = auth.verify_id_token(token)
-              uid = decoded.get("uid")
-          except:
-              uid = None
+        uid = firebase_user.get("uid")
 
         image_bytes = await image.read()
 

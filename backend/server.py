@@ -272,6 +272,8 @@ async def create_baby_account(
             "babyCode": req.baby_code,
             "gender": req.gender,
             "birthDate": req.birth_date,
+            "gestationalWeeks": req.gestational_weeks,
+            "isFullTerm": req.gestational_weeks >= 37,
             "parentOwnerIds": [parent_uid],
             "createdByStaffId": clinician_uid,
             "medicalRecordNo": req.medical_record_no or "",

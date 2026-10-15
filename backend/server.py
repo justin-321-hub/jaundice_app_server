@@ -238,12 +238,8 @@ async def create_baby_account(
             if not isinstance(current_baby_ids, list):
                 current_baby_ids = []
 
-            # 相容舊單一 babyId
-            single_baby_id = parent_data.get("babyId")
-            if isinstance(single_baby_id, str) and single_baby_id:
-                if single_baby_id not in current_baby_ids:
-                    current_baby_ids.append(single_baby_id)
-
+            # 只信任 babyIds。不可再把舊單一 babyId 欄位併入：該欄位過去可由
+            # client 自行改寫，併入等於把被竄改的值洗成 Security Rules 信任的 babyIds
             if baby_id not in current_baby_ids:
                 current_baby_ids.append(baby_id)
 
@@ -413,11 +409,7 @@ async def get_parents(firebase_user: dict = Depends(verify_firebase_user)):
         if not isinstance(baby_ids, list):
             baby_ids = []
 
-        single_baby_id = d.get("babyId")
-        if isinstance(single_baby_id, str) and single_baby_id:
-            if single_baby_id not in baby_ids:
-                baby_ids.append(single_baby_id)
-
+        # 只回報 babyIds（舊單一 babyId 欄位不再被信任，也不計入 babyCount）
         result.append({
             "uid": doc.id,
             "name": d.get("name"),

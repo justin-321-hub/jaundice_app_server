@@ -1,9 +1,9 @@
 import io
 from typing import Optional
 from firebase_admin import auth, firestore
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from .schemas_baby import CreateBabyAccountReq
-from .schemas_admin import CreateClinicianAccountReq
+from .schemas_admin import CreateClinicianAccountReq, CreateInternAccountReq
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, Depends, Form, HTTPException, Request, UploadFile, File
@@ -214,6 +214,13 @@ async def create_baby_account(
             parent_uid = existing_user.uid
         except auth.UserNotFoundError:
             existing_user = None
+
+        # 既有帳號若不是 parent（醫護、實習生、superuser），拒絕：
+        # 否則下方 set(merge=True) 會把它的 role 改寫成 parent
+        if existing_user is not None:
+            existing_doc = db.collection("users").document(parent_uid).get()
+            if existing_doc.exists and (existing_doc.to_dict() or {}).get("role") != "parent":
+                raise HTTPException(status_code=409, detail="Email belongs to a non-parent account")
 
         # 不存在才建立新 parent 帳號
         if existing_user is None:
@@ -438,6 +445,118 @@ async def toggle_parent(
         raise HTTPException(status_code=403, detail="Permission denied")
 
     db.collection("users").document(req.uid).update({
+        "isActive": req.isActive
+    })
+
+    return {"ok": True}
+
+# =========================
+# 護理師實習生（role = intern）帳號管理：僅 superuser 可用。
+# 實習生目前沒有任何寶寶／量測資料權限（Rules 預設拒絕），只能登入進入實習生首頁。
+# =========================
+def _require_superuser(firebase_user: dict) -> str:
+    requester_uid = firebase_user.get("uid")
+    requester_doc = db.collection("users").document(requester_uid).get()
+
+    if not requester_doc.exists:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    requester_data = requester_doc.to_dict() or {}
+    if requester_data.get("role") != "superuser" or requester_data.get("isActive") is False:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    return requester_uid
+
+
+@app.post("/create-intern-account")
+async def create_intern_account(
+    req: CreateInternAccountReq,
+    firebase_user: dict = Depends(verify_firebase_user),
+):
+    try:
+        requester_uid = _require_superuser(firebase_user)
+
+        try:
+            auth.get_user_by_email(req.email)
+            raise HTTPException(status_code=400, detail="Intern email already exists")
+        except auth.UserNotFoundError:
+            pass
+
+        intern_user = auth.create_user(
+            email=req.email,
+            password=req.password,
+        )
+
+        intern_uid = intern_user.uid
+
+        # role 固定為 intern，不接受 client 指定；不寫 babyIds（實習生不綁定寶寶）
+        db.collection("users").document(intern_uid).set({
+            "name": req.name,
+            "email": req.email,
+            "role": "intern",
+            "department": req.department or "",
+            "phone": req.phone or "",
+            "isActive": True,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "createdBy": requester_uid,
+        })
+
+        return {
+            "ok": True,
+            "uid": intern_uid,
+            "email": req.email,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"create intern failed: {e}")
+
+
+@app.get("/interns")
+async def get_interns(firebase_user: dict = Depends(verify_firebase_user)):
+    _require_superuser(firebase_user)
+
+    docs = db.collection("users").where("role", "==", "intern").stream()
+
+    result = []
+    for doc in docs:
+        d = doc.to_dict() or {}
+        result.append({
+            "uid": doc.id,
+            "name": d.get("name"),
+            "email": d.get("email"),
+            "department": d.get("department"),
+            "phone": d.get("phone"),
+            "isActive": d.get("isActive", True),
+        })
+
+    return {"data": result}
+
+
+class ToggleInternReq(BaseModel):
+    uid: str
+    isActive: StrictBool
+
+
+@app.post("/toggle-intern")
+async def toggle_intern(
+    req: ToggleInternReq,
+    firebase_user: dict = Depends(verify_firebase_user),
+):
+    _require_superuser(firebase_user)
+
+    user_ref = db.collection("users").document(req.uid)
+    user_doc = user_ref.get()
+
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="Intern not found")
+
+    # 只能切換實習生，避免誤用此端點停用其他角色
+    if (user_doc.to_dict() or {}).get("role") != "intern":
+        raise HTTPException(status_code=409, detail="Target is not an intern")
+
+    user_ref.update({
         "isActive": req.isActive
     })
 
